@@ -14,7 +14,7 @@ slow_type() {
 
 slow_type "Welcome! I am a program built by Pranava Rao for managing your Virtual Machines."
 
-cat /home/.Banner
+cat ./.Banner
 
 slow_type  "What would you like to do? (Type 'Import' or 'Export'): "
 
