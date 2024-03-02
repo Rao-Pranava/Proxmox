@@ -40,8 +40,15 @@ if [ "$action" == "Import" ]; then
     # Download the file
     wget "http://$IP/$VMname.$F1"
 
-    # Convert the file to VMDK format
-    qemu-img convert -f $F1 -O vmdk "./$VMname.$F1" "./$VMname.vmdk"
+     # Check if the file is already in vmdk format
+    if [ "${F1,,}" != "vmdk" ]; then
+        # Convert the file to VMDK format
+        slow_type "Converting the file to VMDK format..."
+        qemu-img convert -f $F1 -O vmdk "./$VMname.$F1" "./$VMname.vmdk"
+    else
+        slow_type "File is already in VMDK format. Skipping conversion..."
+        mv "$VMname.$F1" "$VMname.vmdk"
+    fi
 
     # Find VM's ID using qm list and grep
     VMID=$(qm list | grep -i "$VMname" | awk '{print $1}')
