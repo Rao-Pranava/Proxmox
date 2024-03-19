@@ -11,10 +11,53 @@ slow_type() {
     echo
 }
 
+# Function to check if the virtual machine exists
+check_vm_exists() {
+    local vm_name="$1"
+    local vm_list=$(qm list | awk '{print $2}')
+    for vm in $vm_list; do
+        if [ "$vm" == "$vm_name" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Function to create a new virtual machine
+create_vm() {
+    local vm_name="$1"
+    local ram="$2"
+    local os="$3"
+    local vmid=$(($(qm list | awk '{print $1}' | sort -n | tail -n 1) + 1))
+    local ram_mb=$(echo "$ram" | sed 's/[^0-9]*//g')
+    local os_type
+
+    if [ "$os" == "Linux" ]; then
+        os_type=l26
+    elif [ "$os" == "Windows 10" ]; then
+        os_type=win10
+    elif [ "$os" == "Windows 11" ]; then
+        os_type=win11
+    elif [ "$os" == "Windows 7" ]; then
+        os_type=win7
+    elif [ "$os" == "Windows 8" ]; then
+        os_type=win8
+    elif [ "$os" == "Windows Vista" ]; then
+        os_type=wvista
+    elif [ "$os" == "Windows XP" ]; then
+        os_type=wxp
+    else
+        slow_type "Unsupported OS type. Please choose Linux or Windows 10 or Widnows 11 or Widnows 7 or Widnows 8 or Windows Vista or Windows XP."
+        exit 1
+    fi
+
+    qm create $vmid --name "$vm_name" --net0 model=virtio,bridge=vmbr0,firewall=1 --memory "$ram_mb" --ostype "$os_type" --storage local
+    slow_type "New virtual machine created successfully with ID: $vmid"
+}
 
 slow_type "Welcome! I am a program built by Pranava Rao for managing your Virtual Machines."
 
-cat ./.Banner
+cat /home/.Banner
 
 slow_type  "What would you like to do? (Type 'Import' or 'Export'): "
 
@@ -28,8 +71,42 @@ if [ "$action" == "Import" ]; then
 
     slow_type "Enter the IP Address of the source to Download the file: "
     read -p "" IP
-    slow_type "Enter the Virtual Machine's name (the file name should be same as registered in Proxmox): "
+    slow_type "Enter the Virtual Machine's name (the file name should be same as registered in Proxmox) or you can create one (Type: Create1): "
     read -p "" VMname
+
+    if [ "$VMname" == "Create1" ]; then
+        slow_type "Creating a new virtual machine..."
+        
+        IMVMname=$VMname
+        
+        slow_type "How much memory would you like to allocate? (in MBs): "
+        read -p "" IMRAM
+        slow_type "What operating system will you be running? (Linux or Windows): "
+        read -p "" IMOS
+
+        create_vm "$IMVMname" "$IMRAM" "$IMOS"
+    else
+        while ! check_vm_exists "$VMname"; do
+            slow_type "Virtual machine '$VMname' does not exist. Here are the virtual machines present on your server:"
+            qm list | awk '{print $2}'
+            slow_type "If you are not able to see your virtual machine, you can create one by typing 'Create1'"
+            read -p "Enter the Virtual Machine's name: " VMname
+            if [ "$VMname" == "Create1" ]; then
+                slow_type "Creating a new virtual machine..."
+                
+                IMVMname=$VMname
+
+                slow_type "How much memory would you like to allocate? (in MBs): "
+                read -p "" IMRAM
+                slow_type "What operating system will you be running? (Linux or Windows): "
+                read -p "" IMOS
+
+                create_vm "$IMVMname" "$IMRAM" "$IMOS"
+                exit 0
+            fi
+        done
+    fi
+
     slow_type "Enter the format of the file being downloaded: "
     read -p "" F1
 
@@ -40,7 +117,7 @@ if [ "$action" == "Import" ]; then
     # Download the file
     wget "http://$IP/$VMname.$F1"
 
-     # Check if the file is already in vmdk format
+    # Check if the file is already in vmdk format
     if [ "${F1,,}" != "vmdk" ]; then
         # Convert the file to VMDK format
         slow_type "Converting the file to VMDK format..."
@@ -57,7 +134,14 @@ if [ "$action" == "Import" ]; then
     echo "The Virtual Machine $VMname has ID: $VMID"
 
     # Import the vmdk to the virtual machine
-    qm importdisk $VMID "./$VMname.vmdk" local
+    qm importdisk $VMID "./$VMname.vmdk" local --format vmdk
+
+    VMDisk=$(qm config $VMID | grep 'scsi0:' | awk '{print $2}' FS=: OFS=, | cut -d, -f1)
+    VMDiskname=$(qm config $VMID | grep 'scsi0:' | awk '{print $3}' FS=: OFS=, | cut -d, -f1)
+    Path=$VMDisk:$VMDiskname
+
+    qm set $vmid --sata0 $Path
+    qm set $vmid --boot="order=sata0"
 
     # Cleanup: Delete the TEMP folder
     cd ..
@@ -65,13 +149,29 @@ if [ "$action" == "Import" ]; then
 
     slow_type "Import process completed successfully!"
 
+    slow_type "Do you want to power on your Virtual Machine? (Type: yes or no)"
+    read -p "" power
+
+    if ["$power" == "yes"]; then
+        qm start $VMID
+        slow_type "Your Virtual machine is powered on"
+
+    else
+        slow_type "Ok, you can manually power on your Virtul Machine later."
+    
+    fi
+
     slow_type "Thank you! I am at your service anytime."
 
 elif [ "$action" == "Export" ]; then
+
     slow_type "The export process involves:"
     slow_type "1. Taking information from the user"
     slow_type "2. Finding VM's ID and stopping the Virtual Machine"
     slow_type "3. Configuring and exporting the file"
+
+    slow_type "This is the list of Virtual Machines in your server:"
+    qm list | awk '{print $2}'
 
     slow_type "Enter the name of the Virtual Machine to export: "
     read -p "" VMName1
@@ -95,7 +195,9 @@ elif [ "$action" == "Export" ]; then
     VMDisk=$(qm config $VMID1 | grep 'scsi0:' | awk '{print $2}' FS=: OFS=, | cut -d, -f1)
     VMDiskname=$(qm config $VMID1 | grep 'scsi0:' | awk '{print $3}' FS=: OFS=, | cut -d, -f1)
     Path=$(pvesm path $VMDisk:$VMDiskname)
-    qemu-img convert -f vmdk -O $F2 "$Path" "./$VMName1.$F2"
+    VMF1=$(echo "$VMDiskname" | awk -F'.' '{print $2}')
+
+    qemu-img convert -f "$VMF1" -O $F2 "$Path" "./$VMName1.$F2"
 
     slow_type "Starting the Virtual Machine..."
     qm start $VMID1
