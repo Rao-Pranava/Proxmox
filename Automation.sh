@@ -55,6 +55,17 @@ create_vm() {
     slow_type "New virtual machine created successfully with ID: $vmid"
 }
 
+attach_disk() {
+    local VMID="$1"
+    local Dnum="$2"
+    
+    # Path to the disk
+    local path="local:$VMID/vm-$VMID-disk-$Dnum.vmdk"
+    
+    # Set SATA controller for the Virtual Machine
+    qm set $VMID --sata0 $path
+}
+
 slow_type "Welcome! I am a program built by Pranava Rao for managing your Virtual Machines."
 
 cat /home/.Banner
@@ -76,8 +87,11 @@ if [ "$action" == "Import" ]; then
 
     if [ "$VMname" == "Create1" ]; then
         slow_type "Creating a new virtual machine..."
+
+        slow_type "Enter the name for the new virtual machine: "
+        read -p "" IMVMname
         
-        IMVMname=$VMname
+        VMname=$IMVMname
         
         slow_type "How much memory would you like to allocate? (in MBs): "
         read -p "" IMRAM
@@ -94,8 +108,11 @@ if [ "$action" == "Import" ]; then
             if [ "$VMname" == "Create1" ]; then
                 slow_type "Creating a new virtual machine..."
                 
-                IMVMname=$VMname
+                slow_type "Enter the name for the new virtual machine: "
+                read -p "" IMVMname
 
+                VMname=$IMVMname
+                
                 slow_type "How much memory would you like to allocate? (in MBs): "
                 read -p "" IMRAM
                 slow_type "What operating system will you be running? (Linux or Windows): "
@@ -136,12 +153,19 @@ if [ "$action" == "Import" ]; then
     # Import the vmdk to the virtual machine
     qm importdisk $VMID "./$VMname.vmdk" local --format vmdk
 
-    VMDisk=$(qm config $VMID | grep 'scsi0:' | awk '{print $2}' FS=: OFS=, | cut -d, -f1)
-    VMDiskname=$(qm config $VMID | grep 'scsi0:' | awk '{print $3}' FS=: OFS=, | cut -d, -f1)
-    Path=$VMDisk:$VMDiskname
+    slow_type "Enter the disk number displayed above (look at: unused0:local:105/vm-105-disk-0.vmdk and menstion the number after 'disk')"
+    read -p "" Dnum
 
-    qm set $vmid --sata0 $Path
-    qm set $vmid --boot="order=sata0"
+    disks=$(find / -name "vm-$VMID-disk-*" 2>/dev/null | grep $VMID)
+
+    if echo "$disks" | grep -q "disk-$Dnum"; then
+        attach_disk $VMID $Dnum
+        echo "Disk attached successfully to VM $VMID"
+    else
+        echo "Invalid disk number. Please enter a valid disk number."
+    fi
+
+    qm set $VMID --boot="order=sata0"
 
     # Cleanup: Delete the TEMP folder
     cd ..
@@ -152,7 +176,7 @@ if [ "$action" == "Import" ]; then
     slow_type "Do you want to power on your Virtual Machine? (Type: yes or no)"
     read -p "" power
 
-    if ["$power" == "yes"]; then
+    if [ "$power" == "yes" ]; then
         qm start $VMID
         slow_type "Your Virtual machine is powered on"
 
@@ -192,9 +216,44 @@ elif [ "$action" == "Export" ]; then
     qm stop $VMID1
 
     slow_type "Configuring and exporting the file..."
-    VMDisk=$(qm config $VMID1 | grep 'scsi0:' | awk '{print $2}' FS=: OFS=, | cut -d, -f1)
-    VMDiskname=$(qm config $VMID1 | grep 'scsi0:' | awk '{print $3}' FS=: OFS=, | cut -d, -f1)
-    Path=$(pvesm path $VMDisk:$VMDiskname)
+    
+    loc=$"local":$VMID1
+
+    # Find the disk information and store it in a variable
+    disk_info=$(qm config $VMID1 | grep $loc)
+    
+    # Extract disk names dynamically
+    disk_names=$(echo "$disk_info" | awk -F ': ' '{print $1}')
+    
+    # Count the number of disks
+    disk_count=$(echo "$disk_names" | wc -l)
+    
+    # If there's only one disk, extract its name directly
+    if [ "$disk_count" -eq 1 ]; then
+        disk_name=$(echo "$disk_names")
+    else
+        # Print the disk information and prompt the user to select a disk
+        slow_type "Multiple disks found for the virtual machine."
+        slow_type "Please select the disk you want to export:"
+        echo "$disk_names"
+        read -p "Enter the disk name: " selected_disk
+    
+        # Validate user input
+        while ! echo "$disk_names" | grep -qw "$selected_disk"; do
+            slow_type "Invalid disk name. Please select from the following:"
+            echo "$disk_names"
+            read -p "Enter the disk name: " selected_disk
+        done
+    
+        disk_name=$selected_disk
+    fi
+    
+    # Now you have the disk name to export
+    echo "Selected disk: $disk_name"
+
+
+    VMDiskname=$(qm config $VMID1 | grep $disk_name: | awk '{print $3}' FS=: OFS=, | cut -d, -f1)
+    Path="local:$VMDiskname"
     VMF1=$(echo "$VMDiskname" | awk -F'.' '{print $2}')
 
     qemu-img convert -f "$VMF1" -O $F2 "$Path" "./$VMName1.$F2"
